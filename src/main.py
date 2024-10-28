@@ -58,6 +58,7 @@ def whats_new(session: Session) -> Optional[List[Tuple[str, str, str]]]:
         results.append((version_link, h1.text, dl_text))
     return results
 
+
 def latest_versions(session: Session) -> List[Tuple[str, str, str]]:
 
     response, soup = get_response_and_soup(session, MAIN_DOC_URL)
