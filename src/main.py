@@ -23,8 +23,10 @@ from collections import defaultdict
 from outputs import control_output
 from utils import get_response, find_tag
 
+
 class PythonVersionsNotFoundException(Exception):
     """Вызывается, когда не найден список версий Python."""
+
 
 def get_response_and_soup(
     session: Session, url: str, features: str = 'lxml'
@@ -73,7 +75,6 @@ def latest_versions(session: Session) -> List[Tuple[str, str, str]]:
     ul_tags = sidebar.find_all(HTMLTag.UL)
     for ul in ul_tags:
         if 'All versions' in ul.text:
-            a_tags = ul.find_all(HTMLTag.A)
             break
     else:
         raise PythonVersionsNotFoundException(
