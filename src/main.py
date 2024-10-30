@@ -11,17 +11,20 @@ from requests import Session, Response
 from constants import (
     BASE_DIR,
     MAIN_DOC_URL,
-    PEP_DOC_URL,
     EXPECTED_STATUS,
     DOWNLOAD_DIR_PATH,
     HTMLTag,
     RegexPatterns,
-    CSV_ENCODING,
+    MAIN_DOC_PEP_URL,
+    PATTERN_NUMBER_OF_PEP
 )
 from configs import configure_argument_parser, configure_logging
+from collections import defaultdict
 from outputs import control_output
 from utils import get_response, find_tag
 
+class PythonVersionsNotFoundException(Exception):
+    """Вызывается, когда не найден список версий Python."""
 
 def get_response_and_soup(
     session: Session, url: str, features: str = 'lxml'
@@ -60,7 +63,6 @@ def whats_new(session: Session) -> Optional[List[Tuple[str, str, str]]]:
 
 
 def latest_versions(session: Session) -> List[Tuple[str, str, str]]:
-
     response, soup = get_response_and_soup(session, MAIN_DOC_URL)
     if response is None:
         return
@@ -74,26 +76,9 @@ def latest_versions(session: Session) -> List[Tuple[str, str, str]]:
             a_tags = ul.find_all(HTMLTag.A)
             break
     else:
-        raise Exception('Не найден список c версиями Python')
-
-    results = [('Ссылка на статью', 'Заголовок', 'Редактор, автор')]
-    pattern = RegexPatterns.PYTHON_VERSION_STATUS
-
-    for a_tag in a_tags:
-
-        link = a_tag['href']
-
-        text_match = re.search(pattern, a_tag.text)
-        if text_match is not None:
-
-            version, status = text_match.groups()
-        else:
-
-            version, status = a_tag.text, ''
-
-        results.append((link, version, status))
-
-    return results
+        raise PythonVersionsNotFoundException(
+            'Не найден список c версиями Python'
+        )
 
 
 def download(session: Session) -> None:
@@ -116,70 +101,43 @@ def download(session: Session) -> None:
     logging.info(f'Архив был загружен и сохранён: {archive_path}')
 
 
-def pep(session: Session) -> List[Tuple[str, int]]:
-
-    response = get_response(session, PEP_DOC_URL)
+def pep(session):
+    dict_results = defaultdict(int)
+    results = [('Статус', 'Количество')]
+    response = get_response(session, MAIN_DOC_PEP_URL)
     if response is None:
         return
-
-    soup = BeautifulSoup(response.text, features='lxml')
-    section = find_tag(
-        soup, HTMLTag.SECTION, attrs={'id': 'index-by-category'}
-    )
-
-    table = section.find_all(HTMLTag.TABLE)
-
-    pep_div = section.find_all(
-        HTMLTag.A, attrs={'class': 'pep reference internal'}
-    )
-    links_with_numbers = [
-        link for link in pep_div if link.text.strip().isdigit()
-    ]
-
-    expected_status = []
-    for abbr in table:
-        pop = abbr.find_all(HTMLTag.ABBR)
-        for tag in pop:
-            preview_status = tag.text[1:]
-            if preview_status in EXPECTED_STATUS:
-                expected_status.append(EXPECTED_STATUS[preview_status])
-            else:
-                expected_status.append(EXPECTED_STATUS[''])
-
-    list_status_table = []
-    results = [('Статус', 'Количество')]
-    list_status = []
-    i = 0
-    for pep in tqdm(links_with_numbers):
-
-        version_link = urljoin(PEP_DOC_URL, pep['href'])
-
-        response = session.get(version_link)
-        response.encoding = CSV_ENCODING
-        soup = BeautifulSoup(response.text, 'lxml')
-
-        abbr = soup.find(HTMLTag.ABBR)
-        text = abbr.text
-        list_status.append(text)
-
-        if text not in list_status_table:
-            list_status_table.append(text)
-
-        if text not in expected_status[i]:
-            logging.info(
-                f'\nНесовпадающие статусы:\n {version_link}\n '
-                f'Статус в карточке: {text}\n '
-                f'Ожидаемые статусы: {expected_status[i]}'
+    soup = BeautifulSoup(response.text, 'lxml')
+    find_all_tags = soup.find_all('td')
+    for tag in tqdm(find_all_tags):
+        text_match = re.search(PATTERN_NUMBER_OF_PEP, tag.text)
+        if text_match:
+            short_link = tag.find('a')['href']
+            full_url = urljoin(MAIN_DOC_PEP_URL, short_link)
+            status_key = tag.find_previous_sibling('td').text.strip()
+            pep_response = get_response(session, full_url)
+            if pep_response is None:
+                continue
+            pep_soup = BeautifulSoup(pep_response.text, 'lxml')
+            find_tag_dt = find_tag(
+                pep_soup, 'dt', attrs={'class': ['field-even', 'field-odd']}
             )
-
-        i += 1
-
-    total = len(list_status)
-    for tag in list_status_table:
-        num = list_status.count(tag)
-        results.append((tag, num))
-    results.append(('Total', total))
-
+            while find_tag_dt and find_tag_dt.text != 'Status:':
+                find_tag_dt = find_tag_dt.find_next_sibling(
+                    'dt', {'class': ['field-even', 'field-odd']}
+                )
+            status_in_card = find_tag_dt.find_next_sibling('dd').text
+            dict_results[status_in_card] += 1
+            expected_status = EXPECTED_STATUS[status_key[1:]]
+            if status_in_card not in expected_status:
+                logging.info(
+                    f'Несовпадающие статусы:\n'
+                    f'{full_url}\n'
+                    f'Статус в карточке: {status_in_card}\n'
+                    f'Ожидаемые статусы: {expected_status}\n'
+                )
+    results.extend(dict_results.items())
+    results.append(('Total', sum(dict_results.values())))
     return results
 
 
